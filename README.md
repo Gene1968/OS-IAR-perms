@@ -13,7 +13,7 @@ A comprehensive toolset for applying full permissions to OpenSim IAR (Inventory 
 
 ## Files Included
 
-- `fix_iar.bat` - Windows front-end which adds TAR decompress, then runs the Python to apply the perms, then does a TAR recompress "xxx-FIXED.iar", then cleans up.  May be all you need
+- `fix_iar.bat` - Windows front-end which adds TAR decompress, then runs the Python to apply the perms, then does a TAR recompress "xxx-FIXED.iar", then cleans up.  May be all you need to run
 - `apply_full_perms.py` - Main Python script with full functionality
 - `apply_perms.bat` - Windows batch file for easy command-line usage
 - `apply_perms.sh` - Unix/Linux shell script for easy command-line usage
@@ -29,19 +29,19 @@ A comprehensive toolset for applying full permissions to OpenSim IAR (Inventory 
 ### Recommended/easiest workflow (Windows):
 
 1. Make sure you have a subfolder of your Opensim/OSG bin folder where you'd like to work with IAR files. It really helps avoid confusion now, and also to ignore at sim update time.  eg: bin/_myIARediting but it can be anything
-2. Put these scripts either on your command path (to be available globally in the future), or just directly in that IAR folder if you prefer. Update - I moved mind to my commands path folder, and found I still need a copy of the PY file here in my editing folder for now.  Should try to improve this later.
-3. In-world make an inventory folder to hold a few NM, NC and/or NT items you want to convert.  eg. /temp-convert directly under Inventory
-4. Make another inventory folder to restore the fixes to.  Could be /_Restored or /_Import but either way it's helpful once you start doing a bunch of batches of these and you want to compare/test them before deleting originals
-5. Copy or move some NC, NM and/or NT items into your folder eg: /_temp-convert.  Did you know you can any combination of `(no copy) (no modify) (no transfer)` in your search bar to filter/locate them? Very helpful! :)
-6. Save your folder to an IAR, eg: `save iar [Firstname Lastname] /temp-convert [yourpassword] _myIARediting/temp-convert.iar` (or whatever folder and filename you like, but you'll need to remember it)
-7. In your second CMD/Terminal tab, you should go to wherever you saved or moved that IAR, eg:
-`cd C:\[path to your OSgrid bin]\_myIARediting` 
+2. CD there in your Terminal.  eg:
+`cd C:\[path to your OSgrid bin]\_myIARediting`. I like to use a second tab next to my OS console
+3. Put these scripts either on your command path (to be available globally in the future), or just directly in that IAR folder if you prefer. Update - I moved mine to my commands path folder, and found I still need a copy of the PY file here in my editing folder for now.  Should try to improve the reference later.
+4. In-world make an inventory folder to hold some number of NM, NC and/or NT items you want to convert.  eg. /temp-convert directly under Inventory.  I started small, but have done hundreds at once and had no unexpected problems (missing server assets on OSGrid are not made worse by this process; they're either missing or not)
+5. Make or choose another inventory folder to restore the fixes to.  Could be /_Restored or /_Import but either way it's helpful once you start doing a bunch of batches of these and you want to compare/test/sort them before deleting originals (or after)
+6. Copy or move some NC, NM and/or NT items into your folder eg: /_temp-convert.  Did you know you can any combination of `(no copy) (no modify) (no transfer)` in your search bar to filter/locate them? Very helpful! :)
+7. From the OS console, save your folder to an IAR, eg: `save iar [Firstname Lastname] /temp-convert [yourpassword] _myIARediting/temp-convert.iar` (or whatever folder and filename you like, but you'll need to remember it)
 8. you can:  `fix_iar temp-convert` - or whatever you named your file.  The .IAR file extension is optional.  (If you're on Linux you can probably script the tar x, py and tar c commands the same way I did in the Windows bat. We should add that to the repo!)
 9. If you like the output and it shows some modified files, you can now load the new IAR back to the grid, like:  `load iar [Firstname Lastname] _Restored [yourpassword] _myIARediting/temp-convert_fixed.iar`
 
 And that's it, now you can try out your items.  Many will be proper full perm, but I've also found many difficult-to-convert items which __*show*__ as full perm in inventory, but then get much harder to work with once you rezz them.  I'm guessing this might be due to more perms being stored on the asset server side(?)  In these cases they're still improved since you can now rename them in inventory AND copy them, before they revert on rezz sadface.  I also noticed that wearing them from inv reverts some of them, so make a copy and then wear the copy.  I like to mark troubly ones as "FMP" for full/mixed/perms, reminding me they look full but probably have NextOwner issues or rezz issues at the very least.
 
-The nice thing is you can rapidly repeat steps 5-8 all you want and get a rhythm going, since both IARs would just get overwritten if you simply use the up arrow in each console to reuse both filenames.  I find no point in keeping any of the IARs since I already back up my organized folders, but you might save them as a way to "copy no copy" but basically that's any IAR.
+The nice thing is you can rapidly repeat steps 6-9 all you want and get a rhythm going, since both IARs would just get overwritten if you simply use the up arrow in each console to reuse both filenames.  I find no point in keeping any of the IARs since I already back up my organized folders, but you might save them as a way to "copy No Copy" but basically that's any IAR.
 
 
 
