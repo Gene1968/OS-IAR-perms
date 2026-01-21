@@ -40,7 +40,7 @@ echo Output:     !output_file!
 echo.
 
 REM Create temporary directory
-echo [1/5] Creating temporary directory...
+echo [1/6] Creating temporary directory...
 if exist "iartemp" (
     echo WARNING: iartemp directory already exists. Removing...
     rd /s /q "iartemp" 2>nul
@@ -56,7 +56,7 @@ if errorlevel 1 (
 )
 
 REM Extract IAR file
-echo [2/5] Extracting IAR file...
+echo [2/6] Extracting IAR file...
 tar zxf "!input_file!" -C "iartemp" 2>nul
 if errorlevel 1 (
     echo ERROR: Failed to extract IAR file. Check if file is valid.
@@ -70,15 +70,18 @@ if not exist "iartemp\archive.xml" (
 )
 
 REM Apply permissions
-echo [3/5] Applying permissions...
+echo [3/6] Applying permissions...
 call apply_perms.bat "iartemp" --no-confirm
 if errorlevel 1 (
     echo ERROR: Failed to apply permissions.
     goto CLEANUP
 )
 
+REM Script sanitization happens automatically in apply_full_perms.py
+REM The [4/6] message is printed by the Python script itself
+
 REM Create new IAR file
-echo [4/5] Creating new IAR file...
+echo [5/6] Creating new IAR file...
 cd "iartemp" && tar zcf "..\!output_file!" archive.xml inventory/* assets/* 2>nul && cd ..
 if errorlevel 1 (
     echo ERROR: Failed to create new IAR file.
@@ -92,7 +95,7 @@ if not exist "!output_file!" (
 )
 
 REM Clean up
-echo [5/5] Cleaning up...
+echo [6/6] Cleaning up...
 rd /s /q "iartemp" 2>nul
 
 echo.
@@ -125,8 +128,9 @@ echo.
 echo The script will:
 echo   1. Extract the IAR file
 echo   2. Apply full permissions to all items
-echo   3. Create a new IAR with "_fixed" suffix
-echo   4. Clean up temporary files
+echo   3. Scan and disable auto-delete scripts
+echo   4. Create a new IAR with "_fixed" suffix
+echo   5. Clean up temporary files
 echo.
 
 :END

@@ -30,6 +30,8 @@ import sys
 import argparse
 import shutil
 import xml.etree.ElementTree as ET
+import re
+import uuid
 from pathlib import Path
 from datetime import datetime
 
@@ -202,9 +204,10 @@ def apply_permissions_to_xml(file_path, permissions, dry_run=False, verbose=Fals
             'SaleType': '0',
             'SalePrice': '0',
             'GroupID': '00000000-0000-0000-0000-000000000000',
-            'GroupOwned': 'False',
-            'CreatorUUID': 'ospa:n=Gene Freenote'
+            'GroupOwned': 'False'
         }
+		#,
+        #    'CreatorUUID': 'ospa:n=YourName Resident'
         
         # Apply permission changes
         for field_name, new_value in permission_fields.items():
@@ -287,6 +290,305 @@ def apply_permissions_to_xml(file_path, permissions, dry_run=False, verbose=Fals
         return False, f"XML parse error: {e}"
     except Exception as e:
         return False, f"Error processing file: {e}"
+
+def sanitize_lsl_scripts(folder_path, dry_run=False, verbose=False):
+    """
+    Scan for and disable LSL scripts that auto-delete items based on permissions.
+    Detects scripts that call llDie() when certain permissions are detected.
+    """
+    # Patterns that indicate auto-delete scripts
+    suspicious_patterns = [
+        r'llDie\s*\(',  # llDie() calls
+        r'PERM_TRANSFER.*llDie',  # Transfer check -> die
+        r'PERM_COPY.*llDie',  # Copy check -> die
+        r'PERM_MODIFY.*llDie',  # Modify check -> die
+        r'MASK_NEXT.*llDie',  # Next owner perms -> die
+        r'MASK_EVERYONE.*llDie',  # Everyone perms -> die
+    ]
+    
+    # Find all .lsl files in assets directory
+    assets_dir = Path(folder_path) / 'assets'
+    if not assets_dir.exists():
+        if verbose:
+            print(f"Assets directory not found: {assets_dir}")
+        return 0
+    
+    lsl_files = list(assets_dir.glob('*.lsl'))
+    # Also check for text files that might be scripts (some IARs don't use .lsl extension)
+    # But be conservative - only process if they contain LSL keywords
+    text_files = []
+    for ext in ['', '.txt']:
+        for f in assets_dir.glob(f'*{ext}'):
+            if f.is_file() and f not in lsl_files:
+                try:
+                    with open(f, 'r', encoding='utf-8', errors='ignore') as test_file:
+                        content = test_file.read(500)  # Read first 500 chars
+                        if 'll' in content.lower() and ('function' in content.lower() or 'default' in content.lower()):
+                            text_files.append(f)
+                except:
+                    pass
+    
+    all_script_files = lsl_files + text_files
+    disabled_count = 0
+    
+    for script_file in all_script_files:
+        try:
+            # Try multiple encodings
+            encodings = ['utf-8', 'utf-16', 'latin-1', 'cp1252']
+            content = None
+            used_encoding = None
+            
+            for encoding in encodings:
+                try:
+                    with open(script_file, 'r', encoding=encoding) as f:
+                        content = f.read()
+                        used_encoding = encoding
+                        break
+                except UnicodeDecodeError:
+                    continue
+            
+            if content is None:
+                if verbose:
+                    print(f"Could not read {script_file.name} with any encoding")
+                continue
+            
+            # Remove null bytes that can cause script reset issues
+            original_content = content
+            content = content.replace('\x00', '')
+            had_null_bytes = (original_content != content)
+            
+            # Check if this script contains suspicious patterns
+            is_suspicious = False
+            matched_patterns = []
+            
+            # Check for llDie() calls (most direct indicator)
+            llDie_matches = list(re.finditer(r'llDie\s*\(', content, re.IGNORECASE))
+            if llDie_matches:
+                is_suspicious = True
+                matched_patterns.append(f'llDie() calls found: {len(llDie_matches)}')
+            
+            # Check for permission checks followed by llDie
+            for pattern in suspicious_patterns[1:]:  # Skip the first one (llDie) as we already checked
+                if re.search(pattern, content, re.IGNORECASE | re.MULTILINE):
+                    is_suspicious = True
+                    matched_patterns.append(pattern)
+            
+            # Additional check: look for the specific pattern from the example
+            # Check for permission mask checks followed by llDie
+            if re.search(r'(PERM_TRANSFER|PERM_COPY|PERM_MODIFY).*?llDie', content, re.IGNORECASE | re.DOTALL):
+                is_suspicious = True
+                if 'permission_check_then_die' not in matched_patterns:
+                    matched_patterns.append('permission_check_then_die')
+            
+            if is_suspicious:
+                if verbose:
+                    print(f"⚠️  Suspicious script detected: {script_file.name}")
+                    print(f"   Matched patterns: {', '.join(matched_patterns)}")
+                    if had_null_bytes:
+                        print(f"   Removed null bytes from script")
+                
+                if not dry_run:
+                    # Simple approach: comment out problematic lines
+                    # Split into lines to make replacements easier
+                    lines = content.split('\n')
+                    changes_made = []
+                    lines_to_comment = set()
+                    
+                    # Find and comment out llDie() calls and their containing if statements
+                    for match in llDie_matches:
+                        start_pos = match.start()
+                        line_num = content[:start_pos].count('\n')
+                        if line_num < len(lines):
+                            line = lines[line_num]
+                            if not line.strip().startswith('//') and 'llDie' in line:
+                                # Comment out the llDie line
+                                lines_to_comment.add(line_num)
+                                changes_made.append(f"llDie() call")
+                                
+                                # Look backwards for the if statement
+                                for prev_line_num in range(line_num - 1, max(-1, line_num - 5), -1):
+                                    if prev_line_num < 0:
+                                        break
+                                    prev_line = lines[prev_line_num].strip()
+                                    if not prev_line or prev_line.startswith('//'):
+                                        continue
+                                    if (prev_line.startswith('if') and 
+                                        ('PERM_' in prev_line or 'MASK_' in prev_line) and
+                                        not prev_line.startswith('//')):
+                                        lines_to_comment.add(prev_line_num)
+                                        changes_made.append(f"if statement with permission check")
+                                        break
+                                    if prev_line.startswith('}') or 'function' in prev_line.lower():
+                                        break
+                    
+                    # Find and comment out CheckPerms() calls (not function definitions)
+                    for i, line in enumerate(lines):
+                        stripped = line.strip()
+                        if 'CheckPerms' in stripped and '(' in stripped and not stripped.startswith('//'):
+                            # It's a call if it's not a function definition (no opening brace on same/next line)
+                            is_definition = False
+                            if '{' in line:
+                                is_definition = True
+                            else:
+                                # Check next few lines for opening brace
+                                for j in range(i + 1, min(i + 3, len(lines))):
+                                    if '{' in lines[j] and not lines[j].strip().startswith('//'):
+                                        is_definition = True
+                                        break
+                                    if lines[j].strip() and not lines[j].strip().startswith('//'):
+                                        break
+                            
+                            if not is_definition:
+                                lines_to_comment.add(i)
+                                changes_made.append(f"CheckPerms() call")
+                    
+                    # Note: We intentionally do NOT comment out llResetScript() calls
+                    # because they help reset the script state and force reload of sanitized code
+                    
+                    # Comment out all identified lines
+                    for line_num in sorted(lines_to_comment, reverse=True):
+                        line = lines[line_num]
+                        indentation = len(line) - len(line.lstrip())
+                        commented_line = ' ' * indentation + '// DISABLED BY IAR FIXER: ' + line.lstrip()
+                        lines[line_num] = commented_line
+                    
+                    # Reconstruct the content
+                    sanitized_content = '\n'.join(lines)
+                    
+                    # Add header comment if we made changes
+                    if changes_made:
+                        unique_changes = list(set(changes_made))  # Remove duplicates
+                        header = "/* DISABLED BY IAR FIXER - Auto-delete script detected\n"
+                        header += f"   Disabled: {', '.join(unique_changes)}\n"
+                        if had_null_bytes:
+                            header += "   Removed null bytes\n"
+                        header += "*/\n\n"
+                        sanitized_content = header + sanitized_content
+                    
+                    # Write back with the same encoding we used to read, but always as UTF-8 to avoid null bytes
+                    with open(script_file, 'w', encoding='utf-8', newline='\n') as f:
+                        f.write(sanitized_content)
+                    
+                    if verbose:
+                        print(f"   ✓ Disabled {len(llDie_matches)} llDie() call(s)")
+                        if had_null_bytes:
+                            print(f"   ✓ Removed null bytes")
+                
+                disabled_count += 1
+            elif had_null_bytes:
+                # Even if not suspicious, remove null bytes
+                if not dry_run:
+                    with open(script_file, 'w', encoding='utf-8', newline='\n') as f:
+                        f.write(content)
+                    if verbose:
+                        print(f"✓ Cleaned null bytes from {script_file.name}")
+            elif verbose:
+                print(f"✓ Safe script: {script_file.name}")
+                
+        except Exception as e:
+            if verbose:
+                print(f"Error processing {script_file.name}: {e}")
+            continue
+    
+    return disabled_count
+
+def clear_saved_script_states(folder_path, sanitized_script_uuids, dry_run=False, verbose=False):
+    """
+    Clear SavedScriptState from object XML files that reference sanitized scripts.
+    This forces the server to reload scripts from the IAR instead of using cached state.
+    """
+    assets_dir = Path(folder_path) / 'assets'
+    if not assets_dir.exists():
+        return 0
+    
+    # Find all object XML files
+    object_files = list(assets_dir.glob('*_object.xml'))
+    cleared_count = 0
+    
+    for object_file in object_files:
+        try:
+            # Try multiple encodings
+            encodings = ['utf-8', 'utf-16', 'latin-1', 'cp1252']
+            content = None
+            used_encoding = None
+            
+            for encoding in encodings:
+                try:
+                    with open(object_file, 'r', encoding=encoding) as f:
+                        content = f.read()
+                        used_encoding = encoding
+                        break
+                except UnicodeDecodeError:
+                    continue
+            
+            if content is None:
+                continue
+            
+            # Parse XML (handle namespaces)
+            try:
+                # Register namespaces to avoid issues
+                ET.register_namespace('', '')
+                root = ET.fromstring(content)
+            except ET.ParseError:
+                continue
+            
+            # Find SavedScriptState elements (search without namespace)
+            script_states_cleared = False
+            
+            # Search for SavedScriptState - handle both with and without namespaces
+            # Use a recursive approach to track parent elements
+            def find_and_remove_script_states(elem, parent=None):
+                nonlocal script_states_cleared
+                if 'SavedScriptState' in elem.tag:
+                    # Check if this references a sanitized script
+                    for child in elem.iter():
+                        if 'Asset' in child.tag and child.text:
+                            asset_uuid = child.text.strip()
+                            if asset_uuid in sanitized_script_uuids:
+                                # Remove this SavedScriptState
+                                if parent is not None:
+                                    parent.remove(elem)
+                                    script_states_cleared = True
+                                    if verbose:
+                                        print(f"  Cleared SavedScriptState for script {asset_uuid} in {object_file.name}")
+                                return
+                # Recursively process children
+                for child in list(elem):
+                    find_and_remove_script_states(child, elem)
+            
+            find_and_remove_script_states(root)
+            
+            # Also check TaskInventory items that reference sanitized scripts
+            for elem in root.iter():
+                if 'TaskInventoryItem' in elem.tag:
+                    # Find AssetID element, then UUID within it
+                    for asset_id in elem.iter():
+                        if 'AssetID' in asset_id.tag:
+                            for uuid_elem in asset_id:
+                                if 'UUID' in uuid_elem.tag and uuid_elem.text:
+                                    asset_uuid = uuid_elem.text.strip()
+                                    if asset_uuid in sanitized_script_uuids:
+                                        if verbose:
+                                            print(f"  Found TaskInventoryItem referencing sanitized script {asset_uuid} in {object_file.name}")
+                                    break
+                            break
+            
+            if script_states_cleared and not dry_run:
+                # Reconstruct XML
+                xml_content = '<?xml version="1.0" encoding="utf-16"?>\n'
+                xml_content += ET.tostring(root, encoding='unicode')
+                
+                with open(object_file, 'w', encoding='utf-8') as f:
+                    f.write(xml_content)
+                
+                cleared_count += 1
+                
+        except Exception as e:
+            if verbose:
+                print(f"Error processing {object_file.name}: {e}")
+            continue
+    
+    return cleared_count
 
 def main():
     """Main function."""
@@ -375,6 +677,56 @@ def main():
         print(f"\nDRY RUN: {modified_count} files would have been modified")
     elif modified_count > 0:
         print(f"\nSuccessfully modified {modified_count} files")
+    
+    # NEW: Sanitize LSL scripts if processing an extracted IAR
+    # Check if we're in an extracted IAR directory (has assets/ folder)
+    assets_dir = Path(args.folder) / 'assets'
+    if assets_dir.exists():
+        # Print the step message here so it appears before the script sanitization output
+        print("[4/6] Scanning for auto-delete scripts...")
+        import sys
+        sys.stdout.flush()  # Ensure message is displayed before script processing
+        disabled_scripts = sanitize_lsl_scripts(args.folder, args.dry_run, args.verbose)
+        
+        # Collect UUIDs of sanitized scripts
+        sanitized_uuids = set()
+        if disabled_scripts > 0:
+            # Find script files that were sanitized
+            for script_file in assets_dir.glob('*.lsl'):
+                try:
+                    with open(script_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read(200)  # Read first 200 chars
+                        if 'DISABLED BY IAR FIXER' in content:
+                            # Extract UUID from filename (format: UUID_script.lsl)
+                            uuid_part = script_file.stem.replace('_script', '')
+                            if len(uuid_part) == 36:  # UUID length
+                                sanitized_uuids.add(uuid_part)
+                except:
+                    pass
+            
+            # Clear SavedScriptState from object XML files
+            if sanitized_uuids:
+                print(f"Clearing SavedScriptState for {len(sanitized_uuids)} sanitized script(s)...")
+                cleared_states = clear_saved_script_states(args.folder, sanitized_uuids, args.dry_run, args.verbose)
+                if cleared_states > 0:
+                    if args.dry_run:
+                        print(f"DRY RUN: Would clear SavedScriptState from {cleared_states} object(s)")
+                    else:
+                        print(f"✓ Cleared SavedScriptState from {cleared_states} object(s)")
+        
+        if disabled_scripts > 0:
+            if args.dry_run:
+                print(f"DRY RUN: Would disable {disabled_scripts} suspicious script(s)")
+            else:
+                print(f"✓ Disabled {disabled_scripts} suspicious script(s)")
+                print(f"\n⚠️  NOTE: If objects still auto-delete after import, the server may be")
+                print(f"   loading scripts from asset cache by UUID. Try:")
+                print(f"   1. Import to a different inventory folder (forces new asset UUIDs)")
+                print(f"   2. Wait for server cache to expire (may take hours/days)")
+                print(f"   3. Delete objects from inventory before re-importing")
+        else:
+            if args.verbose:
+                print("No suspicious scripts found")
 
 if __name__ == "__main__":
     main() 
